@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Buzzer Beater</title>
+<meta name="description" content="A drag-to-shoot basketball game with a leaderboard.">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=Inter:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a single court panel (canvas) with a chalkboard leaderboard that
+     sits beside it on wide screens and stacks beneath it on phones. */
+  :root {
+    --court: #c88a4a;        /* hardwood */
+    --court-dark: #a86d33;
+    --line: #f4ead6;         /* painted court lines */
+    --bg: #1c1512;           /* arena dark surround */
+    --panel: #241a15;
+    --panel-2: #2e2219;
+    --fg: #f4ead6;
+    --muted: #b79a7e;
+    --accent: #e8622c;       /* basketball orange */
+    --accent-2: #f0a63c;
+    --good: #5fbf6a;
+    --board: #14100d;        /* chalkboard */
+    --chalk: #ede6d6;
+    --you: #f0a63c;
+    --hairline: #3a2c22;
+    color-scheme: dark;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  :root[data-theme="light"] {
+    --bg: #ece2d2;
+    --panel: #f6efe2;
+    --panel-2: #efe5d4;
+    --fg: #2a1f17;
+    --muted: #7a6450;
+    --board: #211a14;
+    --chalk: #efe7d7;
+    --hairline: #d9cab4;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding-block: 18px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    font-family: 'Bungee', 'Inter', sans-serif;
+    font-size: clamp(1.6rem, 5vw, 2.4rem);
+    letter-spacing: 0.01em;
+    line-height: 1;
+    text-wrap: balance;
+    background: linear-gradient(135deg, var(--accent-2), var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .tag {
+    font-size: 0.8rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .theme-btn {
+    background: var(--panel-2);
+    color: var(--muted);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .theme-btn:hover { color: var(--fg); }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  @media (min-width: 760px) {
+    .stage { grid-template-columns: minmax(0, 1.55fr) minmax(240px, 1fr); align-items: start; }
+  }
+
+  .court-card {
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    background: var(--court);
+    border: 1px solid var(--hairline);
+    box-shadow: 0 10px 34px rgba(0,0,0,0.38);
+    min-width: 0;
+  }
+  canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; }
+
+  /* Scoreboard overlaid on the court */
+  .hud {
+    position: absolute;
+    top: 12px; left: 12px; right: 12px;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .hud .chip {
+    background: rgba(20,16,13,0.74);
+    backdrop-filter: blur(3px);
+    border: 1px solid rgba(244,234,214,0.14);
+    border-radius: 10px;
+    padding: 6px 12px;
+    text-align: center;
+    min-width: 66px;
+  }
+  .hud .label { font-size: 0.6rem; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase; }
+  .hud .val {
+    font-family: 'Bungee', monospace;
+    font-size: 1.3rem;
+    line-height: 1.1;
+    color: var(--fg);
+  }
+  .hud .val.hot { color: var(--accent-2); }
+  .hud .val.warn { color: var(--accent); }
+
+  .toast {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%) scale(0.6);
+    font-family: 'Bungee', sans-serif;
+    font-size: clamp(2rem, 9vw, 4rem);
+    color: var(--accent-2);
+    text-shadow: 0 2px 0 rgba(0,0,0,0.35);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .toast.show { animation: pop 0.9s ease forwards; }
+  @keyframes pop {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5) rotate(-6deg); }
+    25% { opacity: 1; transform: translate(-50%, -58%) scale(1.1) rotate(-2deg); }
+    70% { opacity: 1; transform: translate(-50%, -62%) scale(1) rotate(0deg); }
+    100% { opacity: 0; transform: translate(-50%, -78%) scale(0.95); }
+  }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    text-align: center;
+    background: rgba(20,16,13,0.82);
+    backdrop-filter: blur(4px);
+    padding: 24px;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay h2 {
+    font-family: 'Bungee', sans-serif;
+    margin: 0;
+    font-size: clamp(1.5rem, 6vw, 2.4rem);
+    text-wrap: balance;
+  }
+  .overlay p { margin: 0; color: var(--muted); max-width: 42ch; font-size: 0.92rem; line-height: 1.5; }
+  .big-score { font-family: 'Bungee', sans-serif; font-size: 3rem; color: var(--accent-2); line-height: 1; }
+  .name-input {
+    font-family: 'Inter', sans-serif;
+    font-size: 1rem;
+    text-align: center;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--hairline);
+    background: var(--panel-2);
+    color: var(--fg);
+    width: min(260px, 80%);
+  }
+  .name-input::placeholder { color: var(--muted); }
+  .name-input:focus { outline: 2px solid var(--accent-2); outline-offset: 1px; }
+  .name-input.err { border-color: var(--accent); }
+  .play-btn {
+    font-family: 'Bungee', sans-serif;
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+    border: none;
+    border-radius: 12px;
+    padding: 14px 30px;
+    cursor: pointer;
+    color: #1c1512;
+    background: linear-gradient(135deg, var(--accent-2), var(--accent));
+    box-shadow: 0 6px 0 #a8431b;
+    transition: transform 0.06s, box-shadow 0.06s;
+  }
+  .play-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #a8431b; }
+  .hint { font-size: 0.78rem; color: var(--muted); min-height: 1em; }
+
+  /* Leaderboard chalkboard */
+  .board {
+    background: var(--board);
+    border: 1px solid var(--hairline);
+    border-radius: 16px;
+    padding: 16px 16px 18px;
+    box-shadow: 0 10px 34px rgba(0,0,0,0.3), inset 0 0 60px rgba(0,0,0,0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+  .board h3 {
+    margin: 0;
+    font-family: 'Bungee', sans-serif;
+    font-size: 1rem;
+    letter-spacing: 0.06em;
+    color: var(--chalk);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .board h3 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .board .sub { font-size: 0.72rem; color: var(--muted); margin-top: -4px; }
+  .rows { display: flex; flex-direction: column; gap: 2px; min-height: 60px; }
+  .row {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    color: var(--chalk);
+    border-bottom: 1px dashed rgba(237,230,214,0.08);
+  }
+  .row:last-child { border-bottom: none; }
+  .row.me { background: rgba(240,166,60,0.12); }
+  .row .rank { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.82rem; }
+  .row.top1 .rank { color: var(--accent-2); }
+  .row .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .who .you-tag { color: var(--you); font-size: 0.66rem; letter-spacing: 0.08em; margin-left: 6px; }
+  .row .pts { font-variant-numeric: tabular-nums; font-family: 'Bungee', monospace; font-size: 0.95rem; }
+  .board .empty, .board .note { font-size: 0.8rem; color: var(--muted); line-height: 1.5; padding: 6px 2px; }
+  .board .note { border-top: 1px dashed rgba(237,230,214,0.1); padding-top: 10px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="brand">Buzzer Beater</div>
+      <div class="tag">Drag back, let go, drain threes before the clock dies.</div>
+    </div>
+    <button class="theme-btn" id="themeBtn" type="button">Toggle theme</button>
+  </header>
+
+  <div class="stage">
+    <div class="court-card">
+      <canvas id="court" width="760" height="520" aria-label="Basketball court"></canvas>
+
+      <div class="hud">
+        <div class="chip"><div class="label">Score</div><div class="val" id="hudScore">0</div></div>
+        <div class="chip"><div class="label">Streak</div><div class="val" id="hudStreak">0</div></div>
+        <div class="chip"><div class="label">Time</div><div class="val" id="hudTime">60</div></div>
+      </div>
+
+      <div class="toast" id="toast">SWISH!</div>
+
+      <div class="overlay" id="overlay">
+        <h2 id="ovTitle">Buzzer Beater</h2>
+        <p id="ovText">Drag down from the ball to aim and set power, then release to shoot. Clean swishes are worth more, the hoop drifts as your streak grows, and you have 60 seconds. Beat the board.</p>
+        <input class="name-input" id="nameInput" type="text" maxlength="20" placeholder="Your name" autocomplete="off" aria-label="Your name">
+        <button class="play-btn" id="playBtn" type="button">Tip off</button>
+        <div class="hint" id="ovHint">Enter a name — your best run lands on the leaderboard.</div>
+      </div>
+    </div>
+
+    <aside class="board">
+      <h3><span class="dot"></span> Leaderboard</h3>
+      <div class="sub" id="boardSub">Top runs</div>
+      <div class="rows" id="rows">
+        <div class="empty">Loading the board…</div>
+      </div>
+      <div class="note" id="boardNote"></div>
+    </aside>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Theme ----------
+  var themeBtn = document.getElementById('themeBtn');
+  themeBtn.addEventListener('click', function () {
+    var cur = document.documentElement.getAttribute('data-theme');
+    var next = cur === 'light' ? 'dark' : (cur === 'dark' ? 'light' :
+      (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark'));
+    document.documentElement.setAttribute('data-theme', next);
+  });
+
+  // ---------- Canvas / world ----------
+  var canvas = document.getElementById('court');
+  var ctx = canvas.getContext('2d');
+  var W = 760, H = 520;
+  var DPR = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  canvas.style.aspectRatio = W + ' / ' + H;
+  ctx.scale(DPR, DPR);
+
+  var GRAV = 1300;          // px / s^2
+  var FLOOR = H - 42;
+
+  var origin = { x: 120, y: FLOOR - 70 };
+  var BALL_R = 15;
+
+  var hoop = { x: 600, y: 190, rimW: 58, driftDir: 1, driftSpeed: 0, baseY: 190 };
+  function rimLeft()  { return hoop.x - hoop.rimW / 2; }
+  function rimRight() { return hoop.x + hoop.rimW / 2; }
+
+  // ---------- Game state ----------
+  var state = 'ready';      // ready | aiming | flying | over
+  var score = 0, streak = 0, timeLeft = 60, shots = 0, makes = 0;
+  var ball = null, aim = null, lastTs = 0;
+  var particles = [];
+  var playerName = '';
+
+  var toastEl = document.getElementById('toast');
+  var hudScore = document.getElementById('hudScore');
+  var hudStreak = document.getElementById('hudStreak');
+  var hudTime = document.getElementById('hudTime');
+
+  function resetBall() {
+    ball = { x: origin.x, y: origin.y, vx: 0, vy: 0, scored: false, counted: false, rest: true };
+  }
+  resetBall();
+
+  function startGame() {
+    var ni = document.getElementById('nameInput');
+    var nm = (ni.value || '').trim();
+    if (!nm) {
+      ni.classList.add('err');
+      ni.focus();
+      document.getElementById('ovHint').textContent = 'Enter a name to get on the board.';
+      return;
+    }
+    playerName = nm;
+    try { localStorage.setItem('bb_name', nm); } catch (e) {}
+
+    score = 0; streak = 0; timeLeft = 60; shots = 0; makes = 0;
+    hoop.x = 600; hoop.baseY = 190; hoop.y = 190; hoop.driftSpeed = 0; hoop.driftDir = 1;
+    resetBall();
+    state = 'ready';
+    document.getElementById('overlay').hidden = true;
+    sync();
+    if (!timerId) tick();
+  }
+
+  // ---------- Difficulty: hoop drifts with streak ----------
+  function updateHoop(dt) {
+    var intensity = Math.min(streak, 10);
+    hoop.driftSpeed = intensity * 9;
+    if (hoop.driftSpeed > 0) {
+      hoop.y += hoop.driftDir * hoop.driftSpeed * dt;
+      if (hoop.y < 120) { hoop.y = 120; hoop.driftDir = 1; }
+      if (hoop.y > 300) { hoop.y = 300; hoop.driftDir = -1; }
+    } else {
+      hoop.y = hoop.baseY;
+    }
+  }
+
+  // ---------- Shooting ----------
+  function pointerPos(e) {
+    var r = canvas.getBoundingClientRect();
+    var p = (e.touches && e.touches[0]) ? e.touches[0] : e;
+    return { x: (p.clientX - r.left) * (W / r.width), y: (p.clientY - r.top) * (H / r.height) };
+  }
+  function nearBall(p) { return Math.hypot(p.x - ball.x, p.y - ball.y) < 60; }
+  function onDown(e) {
+    if (state !== 'ready') return;
+    var p = pointerPos(e);
+    if (!nearBall(p)) return;
+    e.preventDefault();
+    state = 'aiming';
+    aim = { sx: ball.x, sy: ball.y, cx: p.x, cy: p.y };
+  }
+  function onMove(e) {
+    if (state !== 'aiming') return;
+    e.preventDefault();
+    aim.cx = pointerPos(e).x;
+    aim.cy = pointerPos(e).y;
+  }
+  function onUp(e) {
+    if (state !== 'aiming') return;
+    e.preventDefault();
+    var dx = aim.sx - aim.cx;
+    var dy = aim.sy - aim.cy;
+    var power = Math.min(Math.hypot(dx, dy), 230) / 230;
+    if (power < 0.04) { state = 'ready'; aim = null; return; }
+    var MAXV = 1300;
+    var mag = Math.hypot(dx, dy) || 1;
+    ball.vx = (dx / mag) * power * MAXV;
+    ball.vy = (dy / mag) * power * MAXV;
+    ball.rest = false; ball.scored = false; ball.counted = false;
+    state = 'flying';
+    shots++;
+    aim = null;
+  }
+  canvas.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  canvas.addEventListener('touchstart', onDown, { passive: false });
+  canvas.addEventListener('touchmove', onMove, { passive: false });
+  canvas.addEventListener('touchend', onUp, { passive: false });
+
+  // ---------- Physics ----------
+  function stepBall(dt) {
+    if (state !== 'flying' || ball.rest) return;
+    ball.vy += GRAV * dt;
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    var lx = rimLeft(), rx = rimRight(), ry = hoop.y;
+
+    if (!ball.scored && ball.vy > 0 &&
+        ball.y > ry - 4 && ball.y < ry + 30 &&
+        ball.x > lx + 5 && ball.x < rx - 5) {
+      ball.scored = true;
+      registerMake();
+    }
+
+    bounceOffPoint(lx, ry);
+    bounceOffPoint(rx, ry);
+
+    var bbX = rx + 12;
+    if (ball.x + BALL_R > bbX && ball.x < bbX + 10 &&
+        ball.y > ry - 70 && ball.y < ry + 30 && ball.vx > 0) {
+      ball.x = bbX - BALL_R;
+      ball.vx *= -0.55;
+    }
+
+    if (ball.y + BALL_R > FLOOR) {
+      ball.y = FLOOR - BALL_R;
+      ball.vy *= -0.5;
+      ball.vx *= 0.7;
+      if (Math.abs(ball.vy) < 60) { endShot(); }
+    }
+    if (ball.x - BALL_R > W + 40 || ball.x + BALL_R < -40 || ball.y > H + 80) {
+      endShot();
+    }
+  }
+
+  function bounceOffPoint(px, py) {
+    var dx = ball.x - px, dy = ball.y - py;
+    var d = Math.hypot(dx, dy);
+    if (d < BALL_R + 3 && d > 0.0001) {
+      var nx = dx / d, ny = dy / d;
+      var overlap = (BALL_R + 3) - d;
+      ball.x += nx * overlap; ball.y += ny * overlap;
+      var dot = ball.vx * nx + ball.vy * ny;
+      ball.vx = (ball.vx - 2 * dot * nx) * 0.62;
+      ball.vy = (ball.vy - 2 * dot * ny) * 0.62;
+    }
+  }
+
+  function registerMake() {
+    var centered = Math.abs(ball.x - hoop.x) < hoop.rimW * 0.22;
+    var clean = centered && Math.abs(ball.vx) < 260;
+    var moving = hoop.driftSpeed > 0;
+    var pts = clean ? 3 : 2;
+    if (moving) pts += 1;
+    streak++;
+    if (streak >= 3) pts += 1;
+    score += pts;
+    makes++;
+    spawnConfetti(hoop.x, hoop.y);
+    showToast(clean ? 'SWISH! +' + pts : 'BUCKET +' + pts);
+    sync();
+  }
+
+  function endShot() {
+    if (state === 'over') return;
+    if (!ball.scored) { streak = 0; sync(); }
+    resetBall();
+    state = 'ready';
+  }
+
+  function showToast(txt) {
+    toastEl.textContent = txt;
+    toastEl.classList.remove('show');
+    void toastEl.offsetWidth;
+    toastEl.classList.add('show');
+  }
+
+  function spawnConfetti(x, y) {
+    var colors = ['#e8622c', '#f0a63c', '#f4ead6', '#5fbf6a'];
+    for (var i = 0; i < 22; i++) {
+      particles.push({
+        x: x, y: y,
+        vx: (Math.random() - 0.5) * 420,
+        vy: (Math.random() - 1.1) * 420,
+        life: 1, color: colors[(Math.random() * colors.length) | 0],
+        size: 3 + Math.random() * 4
+      });
+    }
+  }
+  function stepParticles(dt) {
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.vy += 900 * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.life -= dt * 1.4;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  // ---------- Clock ----------
+  var timerId = null;
+  function tick() {
+    timerId = setInterval(function () {
+      if (state === 'over') return;
+      timeLeft--;
+      if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+      sync();
+    }, 1000);
+  }
+
+  function endGame() {
+    state = 'over';
+    clearInterval(timerId); timerId = null;
+    var acc = shots ? Math.round((makes / shots) * 100) : 0;
+    var ov = document.getElementById('overlay');
+    document.getElementById('ovTitle').textContent = 'Final buzzer';
+    document.getElementById('ovText').innerHTML =
+      '<span class="big-score">' + score + '</span><br>' +
+      makes + ' of ' + shots + ' shots (' + acc + '% from the field).';
+    document.getElementById('ovHint').textContent = '';
+    document.getElementById('playBtn').textContent = 'Run it back';
+    ov.hidden = false;
+    submitScore(score);
+  }
+
+  function sync() {
+    hudScore.textContent = score;
+    hudStreak.textContent = streak;
+    hudStreak.className = 'val' + (streak >= 3 ? ' hot' : '');
+    hudTime.textContent = timeLeft;
+    hudTime.className = 'val' + (timeLeft <= 10 ? ' warn' : '');
+  }
+
+  // ---------- Render ----------
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#d79a57');
+    g.addColorStop(1, '#b97a39');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = 'rgba(120,74,30,0.25)';
+    ctx.lineWidth = 1;
+    for (var px = 0; px < W; px += 38) {
+      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(244,234,214,0.6)';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, FLOOR + 6); ctx.lineTo(W, FLOOR + 6); ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(origin.x, FLOOR + 6, 250, -Math.PI * 0.62, -Math.PI * 0.02);
+    ctx.stroke();
+
+    drawHoop();
+    drawParticles();
+    drawBall();
+    drawAim();
+  }
+
+  function drawHoop() {
+    var ry = hoop.y, lx = rimLeft(), rx = rimRight();
+    var bbX = rx + 12;
+    ctx.fillStyle = 'rgba(244,234,214,0.92)';
+    ctx.fillRect(bbX, ry - 70, 9, 100);
+    ctx.strokeStyle = '#e8622c';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(bbX, ry - 30, 9, 34);
+    ctx.fillStyle = '#5a463a';
+    ctx.fillRect(bbX + 9, ry - 20, 6, FLOOR - ry + 26);
+    ctx.strokeStyle = 'rgba(244,234,214,0.85)';
+    ctx.lineWidth = 1.4;
+    for (var i = 0; i <= 6; i++) {
+      var t = i / 6;
+      var topX = lx + t * hoop.rimW;
+      var botX = lx + hoop.rimW * 0.5 + (t - 0.5) * hoop.rimW * 0.45;
+      ctx.beginPath(); ctx.moveTo(topX, ry); ctx.lineTo(botX, ry + 34); ctx.stroke();
+    }
+    for (var j = 1; j <= 2; j++) {
+      var yy = ry + j * 12;
+      var inset = j * 6;
+      ctx.beginPath(); ctx.moveTo(lx + inset, yy); ctx.lineTo(rx - inset, yy); ctx.stroke();
+    }
+    ctx.strokeStyle = '#e8622c';
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(lx, ry); ctx.lineTo(rx, ry); ctx.stroke();
+    ctx.fillStyle = '#f0a63c';
+    ctx.beginPath(); ctx.arc(lx, ry, 4, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(rx, ry, 4, 0, 7); ctx.fill();
+  }
+
+  function drawBall() {
+    ctx.save();
+    ctx.translate(ball.x, ball.y);
+    var grd = ctx.createRadialGradient(-5, -5, 2, 0, 0, BALL_R + 2);
+    grd.addColorStop(0, '#f2a04a');
+    grd.addColorStop(1, '#d9521f');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(40,20,10,0.75)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -BALL_R); ctx.lineTo(0, BALL_R); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-BALL_R, 0); ctx.lineTo(BALL_R, 0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(-BALL_R, 0, BALL_R, -0.9, 0.9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(BALL_R, 0, BALL_R, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawAim() {
+    if (state !== 'aiming' || !aim) return;
+    var dx = aim.sx - aim.cx, dy = aim.sy - aim.cy;
+    var power = Math.min(Math.hypot(dx, dy), 230) / 230;
+    var mag = Math.hypot(dx, dy) || 1;
+    var MAXV = 1300;
+    var vx = (dx / mag) * power * MAXV, vy = (dy / mag) * power * MAXV;
+
+    ctx.save();
+    var tx = ball.x, ty = ball.y, tvx = vx, tvy = vy, dt = 1 / 60;
+    for (var s = 0; s < 45; s++) {
+      tvy += GRAV * dt;
+      tx += tvx * dt; ty += tvy * dt;
+      if (ty > FLOOR) break;
+      if (s % 3 === 0) {
+        ctx.fillStyle = 'rgba(244,234,214,' + (0.6 - s / 90) + ')';
+        ctx.beginPath(); ctx.arc(tx, ty, 3, 0, 7); ctx.fill();
+      }
+    }
+    ctx.strokeStyle = power > 0.85 ? '#e8622c' : '#f0a63c';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, 24, -Math.PI / 2, -Math.PI / 2 + power * Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(244,234,214,0.4)';
+    ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.moveTo(ball.x, ball.y); ctx.lineTo(aim.cx, aim.cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- Main loop ----------
+  function loop(ts) {
+    var dt = lastTs ? Math.min((ts - lastTs) / 1000, 0.033) : 0.016;
+    lastTs = ts;
+    if (state !== 'over') updateHoop(dt);
+    stepBall(dt);
+    stepParticles(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Prefill a remembered name and clear the error state on typing
+  (function restoreName() {
+    try { var sn = localStorage.getItem('bb_name'); if (sn) document.getElementById('nameInput').value = sn; } catch (e) {}
+  })();
+  document.getElementById('nameInput').addEventListener('input', function () {
+    this.classList.remove('err');
+  });
+  document.getElementById('nameInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') startGame();
+  });
+  document.getElementById('playBtn').addEventListener('click', startGame);
+
+  // ======================================================================
+  //  Leaderboard — shared via the server API (GET/POST /api/scores)
+  // ======================================================================
+  var rowsEl = document.getElementById('rows');
+  var noteEl = document.getElementById('boardNote');
+  var subEl = document.getElementById('boardSub');
+
+  var API = 'api/scores';
+  var lastScores = [];
+  var online = false;
+
+  async function loadBoard() {
+    try {
+      var r = await fetch(API, { cache: 'no-store' });
+      if (!r.ok) throw new Error('http ' + r.status);
+      var j = await r.json();
+      lastScores = (j && j.scores) || [];
+      online = true;
+      subEl.textContent = 'Top runs · shared, live';
+      render();
+    } catch (e) {
+      online = false;
+      subEl.textContent = 'Offline';
+      if (!lastScores.length) {
+        rowsEl.innerHTML = '<div class="empty">Couldn’t reach the leaderboard server. The game still plays.</div>';
+      }
+    }
+  }
+
+  async function submitScore(finalScore) {
+    if (finalScore <= 0) return;
+    try {
+      var r = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName, score: finalScore | 0 })
+      });
+      if (!r.ok) throw new Error('http ' + r.status);
+      var j = await r.json();
+      lastScores = (j && j.scores) || [];
+      online = true;
+      render();
+      flashNote('Posted ' + finalScore + ' pts to the board!');
+    } catch (e) {
+      flashNote('Couldn’t reach the server — your run: ' + finalScore + '.');
+    }
+  }
+
+  function render() {
+    if (!lastScores.length) {
+      rowsEl.innerHTML = '<div class="empty">No scores yet — be the first name on the board.</div>';
+      noteEl.textContent = '';
+      return;
+    }
+    var mineKey = (playerName || '').toLowerCase();
+    var top = lastScores.slice(0, 10);
+    var html = '';
+    for (var i = 0; i < top.length; i++) {
+      var mine = !!mineKey && String(top[i].name).toLowerCase() === mineKey;
+      html += rowHtml(i, top[i].name, top[i].score | 0, mine);
+    }
+    rowsEl.innerHTML = html;
+
+    var myRank = -1, myBest = null;
+    for (var k = 0; k < lastScores.length; k++) {
+      if (String(lastScores[k].name).toLowerCase() === mineKey) { myRank = k; myBest = lastScores[k].score | 0; break; }
+    }
+    noteEl.textContent = (mineKey && myRank >= 10)
+      ? 'Your best: ' + myBest + ' pts — ranked #' + (myRank + 1) + '.'
+      : '';
+  }
+
+  function rowHtml(i, name, pts, mine) {
+    var cls = 'row' + (mine ? ' me' : '') + (i === 0 ? ' top1' : '');
+    var medal = i === 0 ? '🏀' : (i + 1);
+    return '<div class="' + cls + '">' +
+      '<span class="rank">' + medal + '</span>' +
+      '<span class="who">' + escapeHtml(name) + (mine ? '<span class="you-tag">YOU</span>' : '') + '</span>' +
+      '<span class="pts">' + pts + '</span>' +
+    '</div>';
+  }
+
+  var noteTimer = null;
+  function flashNote(msg) {
+    noteEl.textContent = msg;
+    if (noteTimer) clearTimeout(noteTimer);
+    noteTimer = setTimeout(render, 4000);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // Load now, then poll so other players' scores appear without a refresh.
+  loadBoard();
+  setInterval(loadBoard, 15000);
+})();
+</script>
+</body>
+</html>
